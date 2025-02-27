@@ -6,26 +6,25 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
-	"regexp"
 )
 
-type HeadHunterCookies struct {
-	UserAgent string
-	Xsrf      string
-	Token     string
+type HeadHunterClient struct {
+	httpClient *http.Client
+	notify     func(message string) error
 }
 
-func RaiseResume(httpClient *http.Client, hunter *HeadHunterCookies) error {
+func (headhunter *HeadHunterClient) RaiseResume() error {
+	const resumeUpdated = "Resume updated."
+
 	req, err := http.NewRequest("POST", "https://hh.ru/shards/resume/batch_update", nil)
 	if err != nil {
-		return nil
+		return err
 	}
 
-	httpClient = &http.Client{}
+	xsrf := GetSpecifiedCookie(headhunter.httpClient, "https", "hh.ru", "_xsrf")
+	req.Header.Set("x-xsrftoken", xsrf)
 
-	req.Header.Set("x-xsrftoken", hunter.Xsrf)
-	req.Header.Set("cookie", fmt.Sprintf("_xsrf=%s; hhtoken=%s;", hunter.Xsrf, hunter.Token))
-	resp, err := httpClient.Do(req)
+	resp, err := headhunter.httpClient.Do(req)
 	if err != nil {
 		return err
 	}
@@ -35,30 +34,41 @@ func RaiseResume(httpClient *http.Client, hunter *HeadHunterCookies) error {
 		return fmt.Errorf("resume update failed with status code: %d", resp.StatusCode)
 	}
 
+	if headhunter.notify != nil {
+		err := headhunter.notify(resumeUpdated)
+		if err != nil {
+			println(err.Error())
+		}
+	}
+
+	err = headhunter.fetchDefaultCookies()
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 
-func AuthorizeHeadHunter(username string, password string) (*http.Client, *HeadHunterCookies, error) {
+func AuthorizeHeadHunter(username string, password string, notify func(message string) error) (*HeadHunterClient, error) {
 	jar, err := cookiejar.New(nil)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
-	hunter := HeadHunterCookies{
-		UserAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
+	headhunter := HeadHunterClient{
+		httpClient: &http.Client{Jar: jar},
+		notify:     notify,
 	}
 
-	err = hunter.getDefaultCookies()
+	err = headhunter.fetchDefaultCookies()
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
-	client := &http.Client{
-		Jar: jar,
-	}
+	xsrf := GetSpecifiedCookie(headhunter.httpClient, "https", "hh.ru", "_xsrf")
 
 	formData := url.Values{}
-	formData.Set("_xsrf", hunter.Xsrf)
+	formData.Set("_xsrf", xsrf)
 	formData.Set("failUrl", "/account/login?backurl=%2F")
 	formData.Set("accountType", "APPLICANT")
 	formData.Set("remember", "yes")
@@ -67,99 +77,41 @@ func AuthorizeHeadHunter(username string, password string) (*http.Client, *HeadH
 	formData.Set("isBot", "false")
 	formData.Set("captchaText", "")
 
-	req, err := http.NewRequest("POST", "https://hh.ru/account/login?backurl=%2F", bytes.NewBufferString(formData.Encode()))
+	resp, err := headhunter.httpClient.Post("https://hh.ru/account/login?backurl=%2F", "application/x-www-form-urlencoded", bytes.NewBufferString(formData.Encode()))
+
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("cookie", fmt.Sprintf("_xsrf=%s; hhtoken=%s;", hunter.Xsrf, hunter.Token))
-	req.Header.Set("x-xsrftoken", hunter.Xsrf)
-
-	resp, err := client.Do(req)
+	err = resp.Body.Close()
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, nil, fmt.Errorf("authorization failed with status code: %d", resp.StatusCode)
+		return nil, fmt.Errorf("authorization failed with status code: %d", resp.StatusCode)
 	}
 
-	cookies := resp.Header["Set-Cookie"]
-	var cookie string
-	for _, c := range cookies {
-		cookie += c + "\n"
+	if headhunter.notify != nil {
+		err := headhunter.notify("We have authorized on hh.ru")
+		if err != nil {
+			println(err.Error())
+		}
 	}
 
-	xsrfRegex := regexp.MustCompile(`_xsrf=.+?;`)
-	hhtokenRegex := regexp.MustCompile(`hhtoken=.+?;`)
-
-	xsrfMatch := xsrfRegex.FindString(cookie)
-	if xsrfMatch == "" {
-		panic("can't authorize")
-	}
-	hunter.Xsrf = xsrfMatch[6 : len(xsrfMatch)-1]
-
-	hhtokenMatch := hhtokenRegex.FindString(cookie)
-	if hhtokenMatch == "" {
-		panic("can't authorize")
-	}
-	hunter.Token = hhtokenMatch[8 : len(hhtokenMatch)-1]
-
-	return client, &hunter, nil
+	return &headhunter, nil
 }
 
-func (h *HeadHunterCookies) getDefaultCookies() error {
-	url := "https://hh.ru/"
-	headers := map[string]string{"user-agent": h.UserAgent}
-	response, err := doRequest(http.MethodHead, url, headers, nil)
+func (headhunter *HeadHunterClient) fetchDefaultCookies() error {
+
+	resp, err := headhunter.httpClient.Head("https://hh.ru/")
 	if err != nil {
 		return err
 	}
 
-	cookies := response.Header["Set-Cookie"]
-	var cookie string
-	for _, c := range cookies {
-		cookie += c + "\n"
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("failed to fetch default cookies with status code: %d", resp.StatusCode)
 	}
-
-	xsrfRegex := regexp.MustCompile(`_xsrf=.+?;`)
-	hhtokenRegex := regexp.MustCompile(`hhtoken=.+?;`)
-
-	xsrfMatch := xsrfRegex.FindString(cookie)
-	if xsrfMatch == "" {
-		return fmt.Errorf("xsrf cookie not found")
-	}
-	h.Xsrf = xsrfMatch[6 : len(xsrfMatch)-1]
-
-	hhtokenMatch := hhtokenRegex.FindString(cookie)
-	if hhtokenMatch == "" {
-		return fmt.Errorf("hhtoken cookie not found")
-	}
-	h.Token = hhtokenMatch[8 : len(hhtokenMatch)-1]
 
 	return nil
-}
-
-func doRequest(method string, url string, headers map[string]string, body *bytes.Buffer) (*http.Response, error) {
-	client := &http.Client{}
-	var req *http.Request
-	var err error
-	if body == nil {
-		req, err = http.NewRequest(method, url, nil)
-	} else {
-		req, err = http.NewRequest(method, url, body)
-	}
-	if err != nil {
-		return nil, err
-	}
-	for k, v := range headers {
-		req.Header.Set(k, v)
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	return resp, nil
 }

@@ -11,3 +11,4 @@ services:
       - TG_ADMIN_ID=your_tg_id
       - HH_USERNAME=your_hh_username
       - HH_PASSWORD=your_hh_password
+      - HH_UPDATE_HOURS=4

@@ -2,13 +2,12 @@ version: '3.8'
 
 services:
   headhunter-auto-rising:
-    build:
-      dockerfile: Dockerfile
-    container_name: headhunter-auto-rising
+    image: catwithautism/headhunter-auto-rising:latest
+    container_name: hh-auto-riser
     restart: unless-stopped
     environment:
-      - TG_BOT_TOKEN=your_tg_token
-      - TG_ADMIN_ID=your_tg_id
-      - HH_USERNAME=your_hh_username
-      - HH_PASSWORD=your_hh_password
-      - HH_UPDATE_HOURS=4
+      - TG_BOT_TOKEN=${TG_BOT_TOKEN}
+      - TG_ADMIN_ID=${TG_ADMIN_ID}
+      - HH_USERNAME=${HH_USERNAME}
+      - HH_PASSWORD=${HH_PASSWORD}
+      - HH_UPDATE_HOURS=${HH_UPDATE_HOURS}

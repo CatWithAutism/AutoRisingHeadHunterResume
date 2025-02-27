@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  headhunter-auto-rising:
+    build:
+      dockerfile: Dockerfile
+    container_name: headhunter-auto-rising
+    restart: unless-stopped
+    environment:
+      - TG_BOT_TOKEN=your_tg_token
+      - TG_ADMIN_ID=your_tg_id
+      - HH_USERNAME=your_hh_username
+      - HH_PASSWORD=your_hh_password
